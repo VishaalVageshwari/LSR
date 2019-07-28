@@ -27,7 +27,7 @@ class ConfigParser:
    def get_router_info(self, host):
       info = self.config.split()
       router_id = info.pop(0)
-      router_port = info.pop(0)
+      router_port = int(info.pop(0))
       neighbour_count = int(info.pop(0))
 
       neighbours = {}
@@ -36,7 +36,7 @@ class ConfigParser:
       for i in range(0, neighbour_count):
          neighbour_id = info.pop(0)
          edge_weight = float(info.pop(0))
-         neighbour_port = info.pop(0)
+         neighbour_port = int(info.pop(0))
          neighbours[neighbour_id] = { 'address' : (host, neighbour_port), 'weight' : edge_weight }
 
       return (router_id, (host, router_port), neighbour_count, neighbours)

@@ -3,8 +3,9 @@ from socket import *
 from threading import *
 from time import time, sleep
 from ConfigParser import ConfigParser
+from NetworkDijkstra import NetworkDijkstra
 
-HOST = '127.0.01'
+HOST = '127.0.0.1'
 UPDATE_INTERVAL = 1
 ROUTER_UPDATE_INTERVAL = 30
 
@@ -15,10 +16,9 @@ class Router:
       self._address = address
       self._count = count
       self._neighbours = neighbours
-      self._socket = self.create_socket
+      self._socket = self.create_socket()
       self._seq = 0
       self._lsa = self.create_lsa()
-      self._received_seq = {}
       self._network_map = self.init_network_map()
       self._network_dijkstra = NetworkDijkstra(self.id, self.network_map)
 
@@ -53,14 +53,19 @@ class Router:
       return self._seq
 
 
+   @seq.setter
+   def seq(self, seq):
+      self._seq = seq
+
+
    @property
    def lsa(self):
       return self._lsa
 
 
-   @property
-   def received_seq(self):
-      return self._received_seq
+   @lsa.setter
+   def lsa(self, lsa):
+      self._lsa = lsa
 
 
    @property
@@ -80,6 +85,19 @@ class Router:
       return router_socket
 
 
+   # Intialize network map for the router.
+   def init_network_map(self):
+      network_map = {}
+      network_map[self.id] = {}
+
+      # Add this routers neighbours to network map.
+      for key, val in self.neighbours.items():
+         network_map[self.id][key] = { 'address' : val['address'], 'weight' : val['weight'] }
+
+      print(network_map)
+      return network_map
+
+
    # Create Link State Advertisement(LSA) to broadcast.
    def create_lsa(self):
       # Add header containing LSA sequence number, router id,
@@ -88,28 +106,23 @@ class Router:
                str(self.seq) + ' ' +
                self.id + ' ' +
                self.address[0] + ' ' +
-               self.address[1] + ' ' +
-               self.count + '\n'
+               str(self.address[1]) + ' ' +
+               str(self.count) + '\n'
       )
 
-      print(self.neighbours)
-
-      # Add details of neigbours to LSA including edge_id e.g. AB,
-      # neigbour host, neigbour port, weight to neigbour router.
+      # Add details of neighbours to LSA including neighbour id e.g. AB,
+      # neigbour host, neighbour port, weight to neighbour router.
       for key, val in self.neighbours.items():
-         edge_id = self.id + key
          host = val['address'][0]
-         port = val['address'][1]
+         port = str(val['address'][1])
          edge_weight = str(val['weight'])
          message = (
                   message + 
-                  edge_id + ' ' + 
+                  key + ' ' + 
                   host + ' ' +
                   port + ' ' +
                   edge_weight + '\n'
          )
-
-      print(message, end='')
 
       return message
 
@@ -123,58 +136,47 @@ class Router:
       # Extract header info from LSA.
       header = lines.pop(0)
       header_info = header.split()
-      lsa_seq = header_info.pop(0)
+      lsa_seq = int(header_info.pop(0))
       orgin_id = header_info.pop(0)
-      orgin_addr = (header_info.pop(0), header_info.pop(0))
-      neighbour_count = header_info.pop(0)
+      orgin_addr = (header_info.pop(0), int(header_info.pop(0)))
+      neighbour_count = int(header_info.pop(0))
 
       # Store sequence number if it is higher than the previous otherwise
       # return Flase in foward status, there is no need to foward this LSA.
-      if orgin_id not in self.received_seq or lsa_seq > self.received_seq[orgin_id]:
-         self.received_seq[orgin_id] = lsa_seq
+      if orgin_id not in self.network_map:
+         self.network_map[orgin_id] = { 'seq_number' : lsa_seq }
+      elif lsa_seq > self.network_map[orgin_id]['seq_number']:
+         self.network_map[orgin_id]['seq_number'] = lsa_seq
       else:
          return (orgin_id, False)
 
       # Extract and store neigbour info in network map.
       for i in range(0, neighbour_count):
          edge = lines[i]
-         neigbour_info = edge.split()
-         edge_id = neighbour_info.pop(0)
-         neighbour_address = (neigbour_info.pop(0), neigbour_info.pop(0))
-         edge_weight = neigbour_info.pop(0)
-         
-         if edge_id not in network_map:
-            network_map[edge_id] = { 'orgin_address' : orgin_id, 'n_address' : neighbour_address, 'weight' : edge_weight }
+         neighbour_info = edge.split()
+         neighbour_id = neighbour_info.pop(0)
+         neighbour_addr = (neighbour_info.pop(0), int(neighbour_info.pop(0)))
+         edge_weight = neighbour_info.pop(0)
+
+         if neighbour_id not in self.network_map[orgin_id]:
+            self.network_map[orgin_id][neighbour_id] = { 'address' : neighbour_addr, 'weight' : edge_weight }
          else:
-            network_map[edge_id]['n_address'] = neighbour_address
-            network_map[edge_id]['weight'] = edge_weight
+            self.network_map[orgin_id][neighbour_id]['address'] = neighbour_addr
+            self.network_map[orgin_id][neighbour_id]['weight'] = edge_weight
 
       return (orgin_id, True)
-       
-
-   # Intialize network map for the router.
-   def init_network_map(self):
-      network_map = {}
-
-      # Add this routers neighbours to network map.
-      for key, val in self.neighbours.items():
-         edge_id = self.id + key
-         network_map[edge_id] = { 'o_address' : self.address, 'n_address' : val['address'], 'weight' : val['weight'] }
-
-      print(network_map)
-      return network_map
 
 
    # Foward the LSA to relevant neighbours.
-   def forward(self, lsa, orgin_id):
+   def forward(self, lsa, orgin_id, sender_addr):
       # Foward LSA to neighbours
       for key, val in self.neighbours.items():
          neigbour_id = key
          neighbour_addr = val['address']
 
          # If the neigbour is not the sender or the orginal router send LSA
-         if neighbour_addr != sender and neigbour_id != orgin_id:
-            self.socket.sendto(lsa, neighbour_addr)
+         if neighbour_addr != sender_addr and neigbour_id != orgin_id:
+            self.socket.sendto(lsa.encode(), neighbour_addr)
 
 
    # Broadcast LSA to neighbours every UPDATE_INTERVAL (1 sec).
@@ -185,10 +187,11 @@ class Router:
 
          # send LSA to neighbours
          for key, val in self.neighbours.items():
-            self.socket.sendto(self.lsa, val['address'])
+            address = val['address']
+            self.socket.sendto(self.lsa.encode(), address)
 
-         self.seq += 1
-         sleep(UPDATE_INTERVAL)            
+         self.seq = self.seq + 1
+         sleep(UPDATE_INTERVAL)           
 
 
    # Receive LSAs from socket, process and foward them.
@@ -196,11 +199,15 @@ class Router:
       while True:
          # Receive LSA and sender address from socket
          lsa, sender_addr = self.socket.recvfrom(1024)
+         lsa = lsa.decode()
          orgin_id, forward_status = self.store_lsa_info(lsa)
          
          # If foward status was True foward LSA
          if forward_status == True:
             self.forward(lsa, orgin_id, sender_addr)
+         
+      self.socket.close()
+
 
    def run_network_dijkstra(self):
       while True:
@@ -208,6 +215,15 @@ class Router:
          self.network_dijkstra.network_map = self.network_map
          self.network_dijkstra.run_dijkstra()
 
+   
+   def run_LSR(self):
+      broadcast_thread = Thread(target=self.broadcast)
+      broadcast_thread.daemon = True
+      receiver_thread = Thread(target=self.receive)
+      receiver_thread.daemon = True
+      broadcast_thread.start()
+      receiver_thread.start()
+      self.run_network_dijkstra()
 
 
 if __name__ == "__main__":
@@ -219,3 +235,6 @@ if __name__ == "__main__":
    cp = ConfigParser(sys.argv[1])
    ri = cp.get_router_info(HOST)
    router = Router(ri[0], ri[1], ri[2], ri[3])
+
+   # Run Link State Routing threads
+   router.run_LSR()
