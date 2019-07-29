@@ -1,3 +1,5 @@
+from time import time
+
 class ConfigParser:
 
    def __init__(self, filename):
@@ -37,6 +39,6 @@ class ConfigParser:
          neighbour_id = info.pop(0)
          edge_weight = float(info.pop(0))
          neighbour_port = int(info.pop(0))
-         neighbours[neighbour_id] = { 'address' : (host, neighbour_port), 'weight' : edge_weight }
+         neighbours[neighbour_id] = { 'address' : (host, neighbour_port), 'weight' : edge_weight, 'last_received' : time() }
 
       return (router_id, (host, router_port), neighbour_count, neighbours)

@@ -8,6 +8,7 @@ from NetworkDijkstra import NetworkDijkstra
 HOST = '127.0.0.1'
 UPDATE_INTERVAL = 1
 ROUTER_UPDATE_INTERVAL = 30
+MAX_HEARTBEATS = 3
 
 class Router:
 
@@ -16,9 +17,10 @@ class Router:
       self._address = address
       self._count = count
       self._neighbours = neighbours
-      self._socket = self.create_socket()
       self._seq = 0
+      self._received_seq = {}
       self._lsa = self.create_lsa()
+      self._socket = self.create_socket()
       self._network_map = self.init_network_map()
       self._network_dijkstra = NetworkDijkstra(self.id, self.network_map)
 
@@ -59,6 +61,11 @@ class Router:
 
 
    @property
+   def received_seq(self):
+      return self._received_seq
+
+
+   @property
    def lsa(self):
       return self._lsa
 
@@ -95,13 +102,14 @@ class Router:
          network_map[self.id][key] = { 'address' : val['address'], 'weight' : val['weight'] }
 
       print(network_map)
+
       return network_map
 
 
    # Create Link State Advertisement(LSA) to broadcast.
    def create_lsa(self):
       # Add header containing LSA sequence number, router id,
-      # host, port and neigbour count .
+      # host, port and neighbour count.
       message = (
                str(self.seq) + ' ' +
                self.id + ' ' +
@@ -116,12 +124,22 @@ class Router:
          host = val['address'][0]
          port = str(val['address'][1])
          edge_weight = str(val['weight'])
+
+         # If the last lsa was not received within MAX_HEARTBEATS * UPDATE_INTERVAL seconds it would mean 
+         # MAX_HEARTBEAT(3) missed LSAs from a neighbour. 
+         # That neighbour is considered dead until its neighbours receives another LSA from it.
+         if (time() - val['last_received']) > (MAX_HEARTBEATS * UPDATE_INTERVAL):
+            alive_status = 'dead'
+         else:
+            alive_status = 'alive'
+
          message = (
                   message + 
                   key + ' ' + 
                   host + ' ' +
                   port + ' ' +
-                  edge_weight + '\n'
+                  edge_weight + ' ' +
+                  alive_status + '\n'
          )
 
       return message
@@ -141,12 +159,17 @@ class Router:
       orgin_addr = (header_info.pop(0), int(header_info.pop(0)))
       neighbour_count = int(header_info.pop(0))
 
+      # If the orgin of the lsa was a neigbour record the current time as last received.
+      if orgin_id in self.neighbours:
+         self.neighbours[orgin_id]['last_received'] = time()
+
       # Store sequence number if it is higher than the previous otherwise
       # return Flase in foward status, there is no need to foward this LSA.
-      if orgin_id not in self.network_map:
-         self.network_map[orgin_id] = { 'seq_number' : lsa_seq }
-      elif lsa_seq > self.network_map[orgin_id]['seq_number']:
-         self.network_map[orgin_id]['seq_number'] = lsa_seq
+      if orgin_id not in self.received_seq or lsa_seq > self.received_seq[orgin_id]:
+         self.received_seq[orgin_id] = lsa_seq
+         self.network_map[orgin_id] = {}
+      elif lsa_seq > self.received_seq[orgin_id]:
+         self.received_seq[orgin_id] = lsa_seq
       else:
          return (orgin_id, False)
 
@@ -156,15 +179,38 @@ class Router:
          neighbour_info = edge.split()
          neighbour_id = neighbour_info.pop(0)
          neighbour_addr = (neighbour_info.pop(0), int(neighbour_info.pop(0)))
-         edge_weight = neighbour_info.pop(0)
+         edge_weight = float(neighbour_info.pop(0))
+         alive_status = neighbour_info.pop(0)
 
-         if neighbour_id not in self.network_map[orgin_id]:
-            self.network_map[orgin_id][neighbour_id] = { 'address' : neighbour_addr, 'weight' : edge_weight }
+         # If the neighbour is alive store its info otherwise remove every instance of it from network map
+         # and received sequence numbers.
+         if alive_status == "alive":
+            if neighbour_id not in self.network_map[orgin_id]:
+               self.network_map[orgin_id][neighbour_id] = { 'address' : neighbour_addr, 'weight' : edge_weight }
+            else:
+               self.network_map[orgin_id][neighbour_id]['address'] = neighbour_addr
+               self.network_map[orgin_id][neighbour_id]['weight'] = edge_weight
          else:
-            self.network_map[orgin_id][neighbour_id]['address'] = neighbour_addr
-            self.network_map[orgin_id][neighbour_id]['weight'] = edge_weight
+            self.remove_dead_router(neighbour_id)
 
       return (orgin_id, True)
+
+
+   # If a dead router is anywhere in the network map or 
+   # received sequence number dictionaries remove it.
+   def remove_dead_router(self, id):
+      # Remove the router's entry in the network map
+      if id in self.network_map:
+         del self.network_map[id]
+
+      # Remove the router's entry as neibours to other routers in the network map
+      for key, val in self.network_map.items():
+         if id in val:
+            del val[id]
+
+      # Remove received sequence entry for for this router
+      if id in self.received_seq:
+         del self.received_seq[id]
 
 
    # Foward the LSA to relevant neighbours.
@@ -187,8 +233,7 @@ class Router:
 
          # send LSA to neighbours
          for key, val in self.neighbours.items():
-            address = val['address']
-            self.socket.sendto(self.lsa.encode(), address)
+            self.socket.sendto(self.lsa.encode(), val['address'])
 
          self.seq = self.seq + 1
          sleep(UPDATE_INTERVAL)           
@@ -209,13 +254,18 @@ class Router:
       self.socket.close()
 
 
+   # Run Dijkstra's algorithm on a copy of the network map every ROUTER_UPDATE_INTERVAL (30 secs)
+   # and print out the appropriate results
    def run_network_dijkstra(self):
       while True:
          sleep(ROUTER_UPDATE_INTERVAL)
          self.network_dijkstra.network_map = self.network_map
          self.network_dijkstra.run_dijkstra()
+         self.network_dijkstra.print_dijkstra()
 
    
+   # Function to start threads for link state routing, one thread for broadcasting,
+   # one thread for receiving link state advertisements and the set the main thread for dijkstra's.
    def run_LSR(self):
       broadcast_thread = Thread(target=self.broadcast)
       broadcast_thread.daemon = True
