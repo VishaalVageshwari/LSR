@@ -5,10 +5,13 @@ from time import time, sleep
 from ConfigParser import ConfigParser
 from NetworkDijkstra import NetworkDijkstra
 
+# Tested using Python 3.7.3
+
 HOST = '127.0.0.1'
 UPDATE_INTERVAL = 1
 ROUTER_UPDATE_INTERVAL = 30
 MAX_HEARTBEATS = 3
+LAST_LSA_CUSHION = 0.01
 
 class Router:
 
@@ -101,8 +104,6 @@ class Router:
       for key, val in self.neighbours.items():
          network_map[self.id][key] = { 'address' : val['address'], 'weight' : val['weight'] }
 
-      print(network_map)
-
       return network_map
 
 
@@ -125,10 +126,10 @@ class Router:
          port = str(val['address'][1])
          edge_weight = str(val['weight'])
 
-         # If the last lsa was not received within MAX_HEARTBEATS * UPDATE_INTERVAL seconds it would mean 
-         # MAX_HEARTBEAT(3) missed LSAs from a neighbour. 
+         # If the last lsa was not received within (MAX_HEARTBEATS * UPDATE_INTERVAL) + LAST_LSA_CUSHION 
+         # seconds it would mean MAX_HEARTBEAT(3) missed LSAs from a neighbour. 
          # That neighbour is considered dead until its neighbours receives another LSA from it.
-         if (time() - val['last_received']) > (MAX_HEARTBEATS * UPDATE_INTERVAL):
+         if (time() - val['last_received']) > ((MAX_HEARTBEATS * UPDATE_INTERVAL) + LAST_LSA_CUSHION):
             alive_status = 'dead'
          else:
             alive_status = 'alive'
@@ -203,7 +204,7 @@ class Router:
       if id in self.network_map:
          del self.network_map[id]
 
-      # Remove the router's entry as neibours to other routers in the network map
+      # Remove the router's entry as neighbours to other routers in the network map
       for key, val in self.network_map.items():
          if id in val:
             del val[id]
@@ -259,7 +260,7 @@ class Router:
    def run_network_dijkstra(self):
       while True:
          sleep(ROUTER_UPDATE_INTERVAL)
-         self.network_dijkstra.network_map = self.network_map
+         self.network_dijkstra.network_map = self.network_map.copy()
          self.network_dijkstra.run_dijkstra()
          self.network_dijkstra.print_dijkstra()
 

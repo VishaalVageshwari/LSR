@@ -64,6 +64,7 @@ class NetworkDijkstra:
       cost = {}
       pred = {}
       unvisited = set()
+      unvisited.add(self.source_id)
 
       # Set cost for routers to inf and pred to None then add ids to unvisited
       for key, val in self.network_map.items():
