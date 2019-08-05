@@ -2,6 +2,7 @@ import sys, re
 from socket import *
 from threading import *
 from time import time, sleep
+from copy import deepcopy
 from ConfigParser import ConfigParser
 from NetworkDijkstra import NetworkDijkstra
 
@@ -22,9 +23,9 @@ class Router:
       self._neighbours = neighbours
       self._seq = 0
       self._received_seq = {}
+      self._network_map = self.init_network_map()
       self._lsa = self.create_lsa()
       self._socket = self.create_socket()
-      self._network_map = self.init_network_map()
       self._network_dijkstra = NetworkDijkstra(self.id, self.network_map)
 
 
@@ -131,8 +132,13 @@ class Router:
          # That neighbour is considered dead until its neighbours receives another LSA from it.
          if (time() - val['last_received']) > ((MAX_HEARTBEATS * UPDATE_INTERVAL) + LAST_LSA_CUSHION):
             alive_status = 'dead'
+            self.remove_dead_router(key)
          else:
             alive_status = 'alive'
+
+            # To re-introduce revived routers to as neigbours
+            if key not in self.network_map[self.id]:
+               self.network_map[self.id][key] = { 'address' : val['address'], 'weight' : val['weight'] }
 
          message = (
                   message + 
@@ -166,7 +172,7 @@ class Router:
 
       # Store sequence number if it is higher than the previous otherwise
       # return Flase in foward status, there is no need to foward this LSA.
-      if orgin_id not in self.received_seq or lsa_seq > self.received_seq[orgin_id]:
+      if orgin_id not in self.received_seq:
          self.received_seq[orgin_id] = lsa_seq
          self.network_map[orgin_id] = {}
       elif lsa_seq > self.received_seq[orgin_id]:
@@ -260,7 +266,7 @@ class Router:
    def run_network_dijkstra(self):
       while True:
          sleep(ROUTER_UPDATE_INTERVAL)
-         self.network_dijkstra.network_map = self.network_map.copy()
+         self.network_dijkstra.network_map = deepcopy(self.network_map)
          self.network_dijkstra.run_dijkstra()
          self.network_dijkstra.print_dijkstra()
 
