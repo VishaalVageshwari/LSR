@@ -123,4 +123,4 @@ class NetworkDijkstra:
       for key, val in self.cost.items():
          if key != self.source_id:
             path = self.getPath(key)
-            print("Least cost path to router {0}:{1} and cost is {2}".format(key, path, val))
+            print("Least cost path to router {0}: {1} and the cost is {2}".format(key, path, val))

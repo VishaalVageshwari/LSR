@@ -127,9 +127,7 @@ class Router:
          port = str(val['address'][1])
          edge_weight = str(val['weight'])
 
-         # If the last lsa was not received within (MAX_HEARTBEATS * UPDATE_INTERVAL) + LAST_LSA_CUSHION 
-         # seconds it would mean MAX_HEARTBEAT(3) missed LSAs from a neighbour. 
-         # That neighbour is considered dead until its neighbours receives another LSA from it.
+         # Check if neighbour is dead or alive
          if (time() - val['last_received']) > ((MAX_HEARTBEATS * UPDATE_INTERVAL) + LAST_LSA_CUSHION):
             alive_status = 'dead'
             self.remove_dead_router(key)
